@@ -83,6 +83,9 @@
     <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="OpenTK, Version=3.3.3.0, Culture=neutral, PublicKeyToken=bad199fe84eb3df4, processorArchitecture=MSIL">
+      <HintPath>packages\OpenTK.3.3.3\lib\net20\OpenTK.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
@@ -417,6 +420,8 @@
     <None Include="FNA.dll.config">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
+    <None Include="OpenTK.dll.config" />
+    <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="src\Graphics\Effect\StockEffects\FXB\AlphaTestEffect.fxb">
@@ -441,4 +446,8 @@
       <LogicalName>Microsoft.Xna.Framework.Graphics.Effect.Resources.YUVToRGBAEffect.fxb</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
+  <PropertyGroup>
+    <PostBuildEvent>copy /Y "$(TargetPath)" "C:\Program Files (x86)\Steam\steamapps\common\FEZ\$(TargetFileName)"
+copy /Y "$(TargetDir)OpenTK.dll" "C:\Program Files (x86)\Steam\steamapps\common\FEZ\OpenTK.dll"</PostBuildEvent>
+  </PropertyGroup>
 </Project>

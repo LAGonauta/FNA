@@ -23,9 +23,12 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
-
-using OpenAL;
+using OpenTK;
+using OpenTK.Audio;
+using OpenTK.Audio.OpenAL;
 #endregion
 
 namespace Microsoft.Xna.Framework.Audio
@@ -116,9 +119,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		#region Private ALC Variables
 
-		// OpenAL Device/Context Handles
-		private IntPtr alDevice;
-		private IntPtr alContext;
+		// OpenAL Context/Efx Handles
+		private AudioContext alContext;
+		private EffectsExtension efx;
 
 		#endregion
 
@@ -143,40 +146,26 @@ namespace Microsoft.Xna.Framework.Audio
 				 */
 				envDevice = String.Empty;
 			}
-			alDevice = ALC10.alcOpenDevice(envDevice);
-			if (CheckALCError() || alDevice == IntPtr.Zero)
-			{
-				throw new InvalidOperationException("Could not open audio device!");
-			}
 
 			int[] attribute = new int[0];
-			alContext = ALC10.alcCreateContext(alDevice, attribute);
-			if (CheckALCError() || alContext == IntPtr.Zero)
-			{
-				Dispose();
-				throw new InvalidOperationException("Could not create OpenAL context");
-			}
+			alContext = new AudioContext(envDevice);
 
-			ALC10.alcMakeContextCurrent(alContext);
-			if (CheckALCError())
-			{
-				Dispose();
-				throw new InvalidOperationException("Could not make OpenAL context current");
-			}
+			alContext.MakeCurrent();
 
 			float[] ori = new float[]
 			{
 				0.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f
 			};
-			AL10.alListenerfv(AL10.AL_ORIENTATION, ori);
-			AL10.alListener3f(AL10.AL_POSITION, 0.0f, 0.0f, 0.0f);
-			AL10.alListener3f(AL10.AL_VELOCITY, 0.0f, 0.0f, 0.0f);
-			AL10.alListenerf(AL10.AL_GAIN, 1.0f);
+			AL.Listener(ALListenerfv.Orientation, ref ori);
+			AL.Listener(ALListener3f.Position, 0.0f, 0.0f, 0.0f);
+            AL.Listener(ALListener3f.Velocity, 0.0f, 0.0f, 0.0f);
+			AL.Listener(ALListenerf.Gain, 1.0f);
 
-			EFX.alGenFilters(1, out INTERNAL_alFilter);
+			efx = new EffectsExtension();
+			efx.GenFilter(out INTERNAL_alFilter);
 
 			// FIXME: Remove for FNA 16.11! -flibit
-			if (!AL10.alIsExtensionPresent("AL_SOFT_gain_clamp_ex"))
+			if (!AL.IsExtensionPresent("AL_SOFT_gain_clamp_ex"))
 			{
 				FNALoggerEXT.LogWarn("AL_SOFT_gain_clamp_ex not found!");
 				FNALoggerEXT.LogWarn("Update your OpenAL Soft library!");
@@ -189,18 +178,10 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void Dispose()
 		{
-			EFX.alDeleteFilters(1, ref INTERNAL_alFilter);
-
-			ALC10.alcMakeContextCurrent(IntPtr.Zero);
-			if (alContext != IntPtr.Zero)
+			efx.DeleteFilter(ref INTERNAL_alFilter);
+			if (alContext != null)
 			{
-				ALC10.alcDestroyContext(alContext);
-				alContext = IntPtr.Zero;
-			}
-			if (alDevice != IntPtr.Zero)
-			{
-				ALC10.alcCloseDevice(alDevice);
-				alDevice = IntPtr.Zero;
+				alContext.Dispose();
 			}
 		}
 
@@ -222,19 +203,19 @@ namespace Microsoft.Xna.Framework.Audio
 		public void SetMasterVolume(float volume)
 		{
 			/* FIXME: How to ignore listener for individual sources? -flibit
-			 * AL10.alListenerf(AL10.AL_GAIN, volume);
+			 * AL.Listenerf(AL._GAIN, volume);
 			 * Media.MediaPlayer.Queue.ActiveSong.Volume = Media.MediaPlayer.Volume;
 			 */
 		}
 
 		public void SetDopplerScale(float scale)
 		{
-			AL10.alDopplerFactor(scale);
+			AL.DopplerFactor(scale);
 		}
 
 		public void SetSpeedOfSound(float speed)
 		{
-			AL11.alSpeedOfSound(speed);
+			AL.SpeedOfSound(speed);
 		}
 
 		#endregion
@@ -244,7 +225,7 @@ namespace Microsoft.Xna.Framework.Audio
 		public IALBuffer GenBuffer(int sampleRate, AudioChannels channels)
 		{
 			uint result;
-			AL10.alGenBuffers(1, out result);
+			AL.GenBuffers(1, out result);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -263,31 +244,32 @@ namespace Microsoft.Xna.Framework.Audio
 			uint result;
 
 			// Generate the buffer now, in case we need to perform alBuffer ops.
-			AL10.alGenBuffers(1, out result);
+			AL.GenBuffers(1, out result);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
 
-			int format;
+			ALFormat format;
 			int length = data.Length;
 			if (isADPCM)
 			{
 				format = (channels == 2) ?
-					ALEXT.AL_FORMAT_STEREO_MSADPCM_SOFT :
-					ALEXT.AL_FORMAT_MONO_MSADPCM_SOFT;
-				AL10.alBufferi(
-					result,
-					ALEXT.AL_UNPACK_BLOCK_ALIGNMENT_SOFT,
-					(int) formatParameter
-				);
-			}
+				ALFormat.StereoIma4Ext :
+				ALFormat.MonoIma4Ext;
+				//AL10.alBufferi(
+				//    result,
+				//    ALEXT.AL_UNPACK_BLOCK_ALIGNMENT_SOFT,
+				//    (int)formatParameter
+				//);
+				throw new NotSupportedException();
+            }
 			else
 			{
 				if (formatParameter == 1)
 				{
 					format = (channels == 2) ?
-						AL10.AL_FORMAT_STEREO16:
-						AL10.AL_FORMAT_MONO16;
+						ALFormat.Stereo16 :
+						ALFormat.Mono16;
 
 					/* We have to perform extra data validation on
 					 * PCM16 data, as the MS SoundEffect builder will
@@ -300,14 +282,14 @@ namespace Microsoft.Xna.Framework.Audio
 				else
 				{
 					format = (channels == 2) ?
-						AL10.AL_FORMAT_STEREO8:
-						AL10.AL_FORMAT_MONO8;
+						ALFormat.Stereo8:
+						ALFormat.Mono8;
 				}
 			}
 
 			// Load it!
-			AL10.alBufferData(
-				result,
+			AL.BufferData(
+				(int) result,
 				format,
 				data,
 				length,
@@ -319,41 +301,42 @@ namespace Microsoft.Xna.Framework.Audio
 
 			// Calculate the duration now, after we've unpacked the buffer
 			int bufLen, bits;
-			AL10.alGetBufferi(
-				result,
-				AL10.AL_SIZE,
-				out bufLen
-			);
-			AL10.alGetBufferi(
-				result,
-				AL10.AL_BITS,
-				out bits
-			);
+			AL.GetBuffer(result, ALGetBufferi.Size, out bufLen);
+            AL.GetBuffer(result, ALGetBufferi.Bits, out bits);
 			if (bufLen == 0 || bits == 0)
 			{
 				throw new InvalidOperationException(
 					"OpenAL buffer allocation failed!"
 				);
 			}
-			TimeSpan resultDur = TimeSpan.FromSeconds(
-				bufLen /
+
+			var totalFrames = bufLen /
 				(bits / 8) /
-				channels /
-				((double) sampleRate)
-			);
+				channels;
+
+            var resultDur = TimeSpan.FromSeconds(totalFrames /
+                ((double)sampleRate));
 
 			// Set the loop points, if applicable
-			if (loopStart > 0 || loopEnd > 0)
+			if (loopStart > 0 || (loopEnd != totalFrames && loopEnd > 0))
 			{
-				AL10.alBufferiv(
-					result,
-					ALEXT.AL_LOOP_POINTS_SOFT,
-					new int[]
-					{
-						(int) loopStart,
-						(int) loopEnd
-					}
-				);
+				if (AL.IsExtensionPresent("AL_LOOP_POINTS_SOFT"))
+				{
+     //               AL.Buffer(
+					//	result,
+					//	ALEXT.AL_LOOP_POINTS_SOFT,
+					//	new int[]
+					//	{
+					//						(int) loopStart,
+					//						(int) loopEnd
+					//	}
+					//);
+                }
+				else
+				{
+                    Trace.WriteLine($"Unable to set loop points! Not supported, possibly. From: {loopStart}. To: {loopEnd}. Total: {totalFrames}");
+					throw new NotImplementedException("Looping points not implemented");
+                }
 			}
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
@@ -366,7 +349,7 @@ namespace Microsoft.Xna.Framework.Audio
 		public void DeleteBuffer(IALBuffer buffer)
 		{
 			uint handle = (buffer as OpenALBuffer).Handle;
-			AL10.alDeleteBuffers(1, ref handle);
+			AL.DeleteBuffers(1, ref handle);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -379,7 +362,7 @@ namespace Microsoft.Xna.Framework.Audio
 			int count
 		) {
 			OpenALBuffer buf = buffer as OpenALBuffer;
-			AL10.alBufferData(
+			AL.BufferData(
 				buf.Handle,
 				XNAToShort[buf.Channels],
 				data + offset,
@@ -398,7 +381,7 @@ namespace Microsoft.Xna.Framework.Audio
 			int count
 		) {
 			OpenALBuffer buf = buffer as OpenALBuffer;
-			AL10.alBufferData(
+			AL.BufferData(
 				buf.Handle,
 				XNAToFloat[buf.Channels],
 				data + (offset * 4),
@@ -414,16 +397,8 @@ namespace Microsoft.Xna.Framework.Audio
 		{
 			OpenALBuffer buf = buffer as OpenALBuffer;
 			int bufLen, bits;
-			AL10.alGetBufferi(
-				buf.Handle,
-				AL10.AL_SIZE,
-				out bufLen
-			);
-			AL10.alGetBufferi(
-				buf.Handle,
-				AL10.AL_BITS,
-				out bits
-			);
+			AL.GetBuffer(buf.Handle, ALGetBufferi.Size, out bufLen);
+            AL.GetBuffer(buf.Handle, ALGetBufferi.Bits, out bits);
 			bits /= 8;
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
@@ -432,14 +407,19 @@ namespace Microsoft.Xna.Framework.Audio
 			byte[] data = new byte[bufLen];
 			GCHandle dataHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
 			IntPtr dataPtr = dataHandle.AddrOfPinnedObject();
-			ALEXT.alGetBufferSamplesSOFT(
-				buf.Handle,
-				0,
-				bufLen / bits / 2,
-				ALEXT.AL_STEREO_SOFT,
-				bits == 2 ? ALEXT.AL_SHORT_SOFT : ALEXT.AL_BYTE_SOFT,
-				dataPtr
-			);
+			var notImplemented = true;
+			if (notImplemented)
+            {
+                throw new NotImplementedException();
+            }
+			//ALEXT.alGetBufferSamplesSOFT(
+			//	buf.Handle,
+			//	0,
+			//	bufLen / bits / 2,
+			//	ALEXT.AL_STEREO_SOFT,
+			//	bits == 2 ? ALEXT.AL_SHORT_SOFT : ALEXT.AL_BYTE_SOFT,
+			//	dataPtr
+			//);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -492,7 +472,7 @@ namespace Microsoft.Xna.Framework.Audio
 		public IALSource GenSource()
 		{
 			uint result;
-			AL10.alGenSources(1, out result);
+			AL.GenSources(1, out result);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -500,18 +480,14 @@ namespace Microsoft.Xna.Framework.Audio
 			{
 				return null;
 			}
-			AL10.alSourcef(
-				result,
-				AL10.AL_REFERENCE_DISTANCE,
-				AudioDevice.DistanceScale
-			);
+			AL.Source(result, ALSourcef.ReferenceDistance, AudioDevice.DistanceScale);
 			return new OpenALSource(result);
 		}
 
 		public IALSource GenSource(IALBuffer buffer, bool isXACT)
 		{
 			uint result;
-			AL10.alGenSources(1, out result);
+			AL.GenSources(1, out result);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -519,23 +495,12 @@ namespace Microsoft.Xna.Framework.Audio
 			{
 				return null;
 			}
-			AL10.alSourcei(
-				result,
-				AL10.AL_BUFFER,
-				(int) (buffer as OpenALBuffer).Handle
-			);
-			AL10.alSourcef(
-				result,
-				AL10.AL_REFERENCE_DISTANCE,
-				AudioDevice.DistanceScale
-			);
+            AL.Source(result, ALSourcei.Buffer, (int)(buffer as OpenALBuffer).Handle);
+			AL.Source(result, ALSourcef.ReferenceDistance, AudioDevice.DistanceScale);
 			if (isXACT)
 			{
-				AL10.alSourcef(
-					result,
-					AL10.AL_MAX_GAIN,
-					64.0f // FIXME: Arbitrary, but try to keep this sane! -flibit
-				);
+				// FIXME: Arbitrary, but try to keep this sane! -flibit
+				AL.Source(result, ALSourcef.MaxGain, 64.0f);
 			}
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
@@ -546,11 +511,11 @@ namespace Microsoft.Xna.Framework.Audio
 		public void StopAndDisposeSource(IALSource source)
 		{
 			uint handle = (source as OpenALSource).Handle;
-			AL10.alSourceStop(handle);
+			AL.SourceStop(handle);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
-			AL10.alDeleteSources(1, ref handle);
+			AL.DeleteSources(1, ref handle);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -558,7 +523,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void PlaySource(IALSource source)
 		{
-			AL10.alSourcePlay((source as OpenALSource).Handle);
+			AL.SourcePlay((source as OpenALSource).Handle);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -566,7 +531,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void PauseSource(IALSource source)
 		{
-			AL10.alSourcePause((source as OpenALSource).Handle);
+			AL.SourcePause((source as OpenALSource).Handle);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -574,7 +539,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void ResumeSource(IALSource source)
 		{
-			AL10.alSourcePlay((source as OpenALSource).Handle);
+			AL.SourcePlay((source as OpenALSource).Handle);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -582,20 +547,15 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public SoundState GetSourceState(IALSource source)
 		{
-			int state;
-			AL10.alGetSourcei(
-				(source as OpenALSource).Handle,
-				AL10.AL_SOURCE_STATE,
-				out state
-			);
+			var state = AL.GetSourceState((source as OpenALSource).Handle);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
-			if (state == AL10.AL_PLAYING)
+			if (state == ALSourceState.Playing)
 			{
 				return SoundState.Playing;
 			}
-			else if (state == AL10.AL_PAUSED)
+			else if (state == ALSourceState.Paused)
 			{
 				return SoundState.Paused;
 			}
@@ -604,11 +564,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourceVolume(IALSource source, float volume)
 		{
-			AL10.alSourcef(
-				(source as OpenALSource).Handle,
-				AL10.AL_GAIN,
-				volume * SoundEffect.MasterVolume // FIXME: alListener(AL_GAIN) -flibit
-			);
+			AL.Source((source as OpenALSource).Handle, ALSourcef.Gain, volume * SoundEffect.MasterVolume); // FIXME: alListener(AL_GAIN) -flibit
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -616,11 +572,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourceLooped(IALSource source, bool looped)
 		{
-			AL10.alSourcei(
-				(source as OpenALSource).Handle,
-				AL10.AL_LOOPING,
-				looped ? 1 : 0
-			);
+			AL.Source((source as OpenALSource).Handle, ALSourceb.Looping, looped);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -628,13 +580,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourcePan(IALSource source, float pan)
 		{
-			AL10.alSource3f(
-				(source as OpenALSource).Handle,
-				AL10.AL_POSITION,
-				pan,
-				0.0f,
-				(float) -Math.Sqrt(1 - Math.Pow(pan, 2))
-			);
+			AL.Source((source as OpenALSource).Handle, ALSource3f.Position, pan, 0.0f, (float)-Math.Sqrt(1 - Math.Pow(pan, 2)));
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -642,13 +588,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourcePosition(IALSource source, Vector3 pos)
 		{
-			AL10.alSource3f(
-				(source as OpenALSource).Handle,
-				AL10.AL_POSITION,
-				pos.X,
-				pos.Y,
-				pos.Z
-			);
+            AL.Source((source as OpenALSource).Handle, ALSource3f.Position, pos.X, pos.Y, pos.Z);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -671,11 +611,7 @@ namespace Microsoft.Xna.Framework.Audio
 			{
 				throw new IndexOutOfRangeException("XNA PITCH MUST BE WITHIN [-1.0f, 1.0f]!");
 			}
-			AL10.alSourcef(
-				(source as OpenALSource).Handle,
-				AL10.AL_PITCH,
-				(float) Math.Pow(2, pitch)
-			);
+			AL.Source((source as OpenALSource).Handle, ALSourcef.Pitch, (float)Math.Pow(2, pitch));
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -683,13 +619,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourceReverb(IALSource source, IALReverb reverb)
 		{
-			AL10.alSource3i(
-				(source as OpenALSource).Handle,
-				EFX.AL_AUXILIARY_SEND_FILTER,
-				(int) (reverb as OpenALReverb).SlotHandle,
-				0,
-				0
-			);
+			AL.Source((source as OpenALSource).Handle, ALSource3i.EfxAuxiliarySendFilter, (int)(reverb as OpenALReverb).SlotHandle, 0, 0);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -697,13 +627,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourceLowPassFilter(IALSource source, float hfGain)
 		{
-			EFX.alFilteri(INTERNAL_alFilter, EFX.AL_FILTER_TYPE, EFX.AL_FILTER_LOWPASS);
-			EFX.alFilterf(INTERNAL_alFilter, EFX.AL_LOWPASS_GAINHF, hfGain);
-			AL10.alSourcei(
-				(source as OpenALSource).Handle,
-				EFX.AL_DIRECT_FILTER,
-				(int) INTERNAL_alFilter
-			);
+			efx.Filter(INTERNAL_alFilter, EfxFilteri.FilterType, (int)EfxFilterType.Lowpass);
+			efx.Filter(INTERNAL_alFilter, EfxFilterf.LowpassGainHF, hfGain);
+			AL.Source((source as OpenALSource).Handle, ALSourcei.EfxDirectFilter,(int) INTERNAL_alFilter);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -711,13 +637,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourceHighPassFilter(IALSource source, float lfGain)
 		{
-			EFX.alFilteri(INTERNAL_alFilter, EFX.AL_FILTER_TYPE, EFX.AL_FILTER_HIGHPASS);
-			EFX.alFilterf(INTERNAL_alFilter, EFX.AL_HIGHPASS_GAINLF, lfGain);
-			AL10.alSourcei(
-				(source as OpenALSource).Handle,
-				EFX.AL_DIRECT_FILTER,
-				(int) INTERNAL_alFilter
-			);
+            efx.Filter(INTERNAL_alFilter, EfxFilteri.FilterType, (int)EfxFilterType.Highpass);
+            efx.Filter(INTERNAL_alFilter, EfxFilterf.HighpassGainLF, lfGain);
+            AL.Source((source as OpenALSource).Handle, ALSourcei.EfxDirectFilter, (int)INTERNAL_alFilter);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -725,14 +647,10 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetSourceBandPassFilter(IALSource source, float hfGain, float lfGain)
 		{
-			EFX.alFilteri(INTERNAL_alFilter, EFX.AL_FILTER_TYPE, EFX.AL_FILTER_BANDPASS);
-			EFX.alFilterf(INTERNAL_alFilter, EFX.AL_BANDPASS_GAINHF, hfGain);
-			EFX.alFilterf(INTERNAL_alFilter, EFX.AL_BANDPASS_GAINLF, lfGain);
-			AL10.alSourcei(
-				(source as OpenALSource).Handle,
-				EFX.AL_DIRECT_FILTER,
-				(int) INTERNAL_alFilter
-			);
+            efx.Filter(INTERNAL_alFilter, EfxFilteri.FilterType, (int)EfxFilterType.Bandpass);
+            efx.Filter(INTERNAL_alFilter, EfxFilterf.BandpassGainHF, hfGain);
+            efx.Filter(INTERNAL_alFilter, EfxFilterf.BandpassGainLF, lfGain);
+            AL.Source((source as OpenALSource).Handle, ALSourcei.EfxDirectFilter, (int)INTERNAL_alFilter);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -741,7 +659,7 @@ namespace Microsoft.Xna.Framework.Audio
 		public void QueueSourceBuffer(IALSource source, IALBuffer buffer)
 		{
 			uint buf = (buffer as OpenALBuffer).Handle;
-			AL10.alSourceQueueBuffers(
+			AL.SourceQueueBuffers(
 				(source as OpenALSource).Handle,
 				1,
 				ref buf
@@ -757,7 +675,7 @@ namespace Microsoft.Xna.Framework.Audio
 			Queue<IALBuffer> errorCheck
 		) {
 			uint[] bufs = new uint[buffersToDequeue];
-			AL10.alSourceUnqueueBuffers(
+			AL.SourceUnqueueBuffers(
 				(source as OpenALSource).Handle,
 				buffersToDequeue,
 				bufs
@@ -780,12 +698,7 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public int CheckProcessedBuffers(IALSource source)
 		{
-			int result;
-			AL10.alGetSourcei(
-				(source as OpenALSource).Handle,
-				AL10.AL_BUFFERS_PROCESSED,
-				out result
-			);
+			AL.GetSource((source as OpenALSource).Handle, ALGetSourcei.BuffersProcessed, out var result);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -803,21 +716,11 @@ namespace Microsoft.Xna.Framework.Audio
 			int copySize2 = 0;
 
 			// Where are we now?
-			int offset;
-			AL10.alGetSourcei(
-				(source as OpenALSource).Handle,
-				AL11.AL_SAMPLE_OFFSET,
-				out offset
-			);
+			AL.GetSource((source as OpenALSource).Handle, ALGetSourcei.SampleOffset, out var offset);
 
 			// Is that longer than what the active buffer has left...?
 			uint buf = (buffer[0] as OpenALBuffer).Handle;
-			int len;
-			AL10.alGetBufferi(
-				buf,
-				AL10.AL_SIZE,
-				out len
-			);
+			AL.GetBuffer(buf, ALGetBufferi.Size, out var len);
 			len /= 2; // FIXME: Assuming 16-bit!
 			len /= (int) channels;
 			if (offset > len)
@@ -835,30 +738,32 @@ namespace Microsoft.Xna.Framework.Audio
 			// Copy!
 			if (copySize1 > 0)
 			{
-				ALEXT.alGetBufferSamplesSOFT(
-					buf,
-					offset,
-					copySize1,
-					channels == AudioChannels.Stereo ?
-						ALEXT.AL_STEREO_SOFT :
-						ALEXT.AL_MONO_SOFT,
-					ALEXT.AL_FLOAT_SOFT,
-					samples
-				);
-				offset = 0;
+				throw new NotImplementedException();
+				//ALEXT.alGetBufferSamplesSOFT(
+				//	buf,
+				//	offset,
+				//	copySize1,
+				//	channels == AudioChannels.Stereo ?
+				//		ALEXT.AL_STEREO_SOFT :
+				//		ALEXT.AL_MONO_SOFT,
+				//	ALEXT.AL_FLOAT_SOFT,
+				//	samples
+				//);
+				//offset = 0;
 			}
 			if (buffer.Length > 1 && copySize2 > 0)
 			{
-				ALEXT.alGetBufferSamplesSOFT(
-					(buffer[1] as OpenALBuffer).Handle,
-					0,
-					copySize2,
-					channels == AudioChannels.Stereo ?
-						ALEXT.AL_STEREO_SOFT :
-						ALEXT.AL_MONO_SOFT,
-					ALEXT.AL_FLOAT_SOFT,
-					samples + (copySize1 * (int) channels)
-				);
+                throw new NotImplementedException();
+    //            ALEXT.alGetBufferSamplesSOFT(
+				//	(buffer[1] as OpenALBuffer).Handle,
+				//	0,
+				//	copySize2,
+				//	channels == AudioChannels.Stereo ?
+				//		ALEXT.AL_STEREO_SOFT :
+				//		ALEXT.AL_MONO_SOFT,
+				//	ALEXT.AL_FLOAT_SOFT,
+				//	samples + (copySize1 * (int) channels)
+				//);
 			}
 		}
 
@@ -869,14 +774,10 @@ namespace Microsoft.Xna.Framework.Audio
 		public IALReverb GenReverb(DSPParameter[] parameters)
 		{
 			uint slot, effect;
-			EFX.alGenAuxiliaryEffectSlots(1, out slot);
-			EFX.alGenEffects(1, out effect);
+			efx.GenAuxiliaryEffectSlots(1, out slot);
+			efx.GenEffects(1, out effect);
 			// Set up the Reverb Effect
-			EFX.alEffecti(
-				effect,
-				EFX.AL_EFFECT_TYPE,
-				EFX.AL_EFFECT_EAXREVERB
-			);
+			efx.Effect(effect, EfxEffecti.EffectType, (int)EfxEffectType.EaxReverb);
 
 			IALReverb result = new OpenALReverb(slot, effect);
 
@@ -905,11 +806,7 @@ namespace Microsoft.Xna.Framework.Audio
 			SetReverbWetDryMix(result, parameters[21].Value);
 
 			// Bind the Effect to the EffectSlot. XACT will use the EffectSlot.
-			EFX.alAuxiliaryEffectSloti(
-				slot,
-				EFX.AL_EFFECTSLOT_EFFECT,
-				(int) effect
-			);
+			efx.BindEffectToAuxiliarySlot(slot, effect);
 
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
@@ -922,8 +819,8 @@ namespace Microsoft.Xna.Framework.Audio
 			OpenALReverb rv = (reverb as OpenALReverb);
 			uint slot = rv.SlotHandle;
 			uint effect = rv.EffectHandle;
-			EFX.alDeleteAuxiliaryEffectSlots(1, ref slot);
-			EFX.alDeleteEffects(1, ref effect);
+			efx.DeleteAuxiliaryEffectSlots(1, ref slot);
+			efx.DeleteEffects(1, ref effect);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
 #endif
@@ -932,10 +829,9 @@ namespace Microsoft.Xna.Framework.Audio
 		public void CommitReverbChanges(IALReverb reverb)
 		{
 			OpenALReverb rv = (reverb as OpenALReverb);
-			EFX.alAuxiliaryEffectSloti(
+			efx.BindEffectToAuxiliarySlot(
 				rv.SlotHandle,
-				EFX.AL_EFFECTSLOT_EFFECT,
-				(int) rv.EffectHandle
+				rv.EffectHandle
 			);
 #if VERBOSE_AL_DEBUGGING
 			CheckALError();
@@ -944,9 +840,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetReverbReflectionsDelay(IALReverb reverb, float value)
 		{
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_REFLECTIONS_DELAY,
+				EfxEffectf.EaxReverbReflectionsDelay,
 				value / 1000.0f
 			);
 #if VERBOSE_AL_DEBUGGING
@@ -956,9 +852,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetReverbDelay(IALReverb reverb, float value)
 		{
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_LATE_REVERB_DELAY,
+                EfxEffectf.ReverbLateReverbDelay,
 				value / 1000.0f
 			);
 #if VERBOSE_AL_DEBUGGING
@@ -989,9 +885,9 @@ namespace Microsoft.Xna.Framework.Audio
 		public void SetReverbEarlyDiffusion(IALReverb reverb, float value)
 		{
 			// Same as late diffusion, whatever... -flibit
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_DIFFUSION,
+                EfxEffectf.EaxReverbDiffusion,
 				value / 15.0f
 			);
 #if VERBOSE_AL_DEBUGGING
@@ -1002,9 +898,9 @@ namespace Microsoft.Xna.Framework.Audio
 		public void SetReverbLateDiffusion(IALReverb reverb, float value)
 		{
 			// Same as early diffusion, whatever... -flibit
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_DIFFUSION,
+                EfxEffectf.ReverbDiffusion,
 				value / 15.0f
 			);
 #if VERBOSE_AL_DEBUGGING
@@ -1015,9 +911,9 @@ namespace Microsoft.Xna.Framework.Audio
 		public void SetReverbLowEQGain(IALReverb reverb, float value)
 		{
 			// Cutting off volumes from 0db to 4db! -flibit
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_GAINLF,
+                EfxEffectf.EaxReverbGainLF,
 				Math.Min(
 					XACTCalculator.CalculateAmplitudeRatio(
 						value - 8.0f
@@ -1032,9 +928,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetReverbLowEQCutoff(IALReverb reverb, float value)
 		{
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_LFREFERENCE,
+                EfxEffectf.EaxReverbLFReference,
 				(value * 50.0f) + 50.0f
 			);
 #if VERBOSE_AL_DEBUGGING
@@ -1044,9 +940,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetReverbHighEQGain(IALReverb reverb, float value)
 		{
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_GAINHF,
+                EfxEffectf.EaxReverbGainHF,
 				XACTCalculator.CalculateAmplitudeRatio(
 					value - 8.0f
 				)
@@ -1058,9 +954,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetReverbHighEQCutoff(IALReverb reverb, float value)
 		{
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_HFREFERENCE,
+                EfxEffectf.EaxReverbHFReference,
 				(value * 500.0f) + 1000.0f
 			);
 #if VERBOSE_AL_DEBUGGING
@@ -1091,9 +987,9 @@ namespace Microsoft.Xna.Framework.Audio
 		public void SetReverbReflectionsGain(IALReverb reverb, float value)
 		{
 			// Cutting off possible float values above 3.16, for EFX -flibit
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_REFLECTIONS_GAIN,
+                EfxEffectf.EaxReverbReflectionsGain,
 				Math.Min(
 					XACTCalculator.CalculateAmplitudeRatio(value),
 					3.16f
@@ -1107,9 +1003,9 @@ namespace Microsoft.Xna.Framework.Audio
 		public void SetReverbGain(IALReverb reverb, float value)
 		{
 			// Cutting off volumes from 0db to 20db! -flibit
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_GAIN,
+                EfxEffectf.ReverbGain,
 				Math.Min(
 					XACTCalculator.CalculateAmplitudeRatio(value),
 					1.0f
@@ -1126,9 +1022,9 @@ namespace Microsoft.Xna.Framework.Audio
 			 * XACT: 0-30 equal to 0.1-inf seconds?!
 			 * EFX: 0.1-20 seconds
 			 * -flibit
-			EFX.alEffectf(
+			efx.Effectf(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_GAIN,
+				efx._EAXREVERB_GAIN,
 				value
 			);
 			*/
@@ -1136,9 +1032,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void SetReverbDensity(IALReverb reverb, float value)
 		{
-			EFX.alEffectf(
+			efx.Effect(
 				(reverb as OpenALReverb).EffectHandle,
-				EFX.AL_EAXREVERB_DENSITY,
+                EfxEffectf.EaxReverbDensity,
 				value / 100.0f
 			);
 #if VERBOSE_AL_DEBUGGING
@@ -1161,9 +1057,9 @@ namespace Microsoft.Xna.Framework.Audio
 			 * Or, well, "more" right. I'm sure we're still off.
 			 * -flibit
 			 */
-			EFX.alAuxiliaryEffectSlotf(
+			efx.AuxiliaryEffectSlot(
 				(reverb as OpenALReverb).SlotHandle,
-				EFX.AL_EFFECTSLOT_GAIN,
+				EfxAuxiliaryf.EffectslotGain,
 				value / 200.0f
 			);
 		}
@@ -1174,13 +1070,13 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public IntPtr StartDeviceCapture(string name, int sampleRate, int bufSize)
 		{
-			IntPtr result = ALC11.alcCaptureOpenDevice(
+			var result = Alc.CaptureOpenDevice(
 				name,
 				(uint) sampleRate,
-				AL10.AL_FORMAT_MONO16,
+				ALFormat.Mono16,
 				bufSize
 			);
-			ALC11.alcCaptureStart(result);
+			Alc.CaptureStart(result);
 #if VERBOSE_AL_DEBUGGING
 			if (CheckALCError())
 			{
@@ -1192,8 +1088,8 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public void StopDeviceCapture(IntPtr handle)
 		{
-			ALC11.alcCaptureStop(handle);
-			ALC11.alcCaptureCloseDevice(handle);
+			Alc.CaptureStop(handle);
+			Alc.CaptureCloseDevice(handle);
 #if VERBOSE_AL_DEBUGGING
 			if (CheckALCError())
 			{
@@ -1204,17 +1100,17 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public int CaptureSamples(IntPtr handle, IntPtr buffer, int count)
 		{
-			int[] samples = new int[1] { 0 };
-			ALC10.alcGetIntegerv(
+			var samples = new int[1] { 0 };
+			Alc.GetInteger(
 				handle,
-				ALC11.ALC_CAPTURE_SAMPLES,
+				AlcGetInteger.CaptureSamples,
 				1,
 				samples
 			);
 			samples[0] = Math.Min(samples[0], count / 2);
 			if (samples[0] > 0)
 			{
-				ALC11.alcCaptureSamples(handle, buffer, samples[0]);
+				Alc.CaptureSamples(handle, buffer, samples[0]);
 			}
 #if VERBOSE_AL_DEBUGGING
 			if (CheckALCError())
@@ -1227,10 +1123,10 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public bool CaptureHasSamples(IntPtr handle)
 		{
-			int[] samples = new int[1] { 0 };
-			ALC10.alcGetIntegerv(
+			var samples = new int[1] { 0 };
+			Alc.GetInteger(
 				handle,
-				ALC11.ALC_CAPTURE_SAMPLES,
+				AlcGetInteger.CaptureSamples,
 				1,
 				samples
 			);
@@ -1243,9 +1139,9 @@ namespace Microsoft.Xna.Framework.Audio
 
 		private void CheckALError()
 		{
-			int err = AL10.alGetError();
+			var err = AL.GetError();
 
-			if (err == AL10.AL_NO_ERROR)
+			if (err == ALError.NoError)
 			{
 				return;
 			}
@@ -1256,35 +1152,22 @@ namespace Microsoft.Xna.Framework.Audio
 #endif
 		}
 
-		private bool CheckALCError()
-		{
-			int err = ALC10.alcGetError(alDevice);
-
-			if (err == ALC10.ALC_NO_ERROR)
-			{
-				return false;
-			}
-
-			FNALoggerEXT.LogError("OpenAL Device Error: " + err.ToString("X4"));
-			return true;
-		}
-
 		#endregion
 
 		#region Private Static XNA->AL Dictionaries
 
-		private static readonly int[] XNAToShort = new int[]
+		private static readonly ALFormat[] XNAToShort = new[]
 		{
-			AL10.AL_NONE,			// NOPE
-			AL10.AL_FORMAT_MONO16,		// AudioChannels.Mono
-			AL10.AL_FORMAT_STEREO16,	// AudioChannels.Stereo
+			ALFormat.Mono8,			// NOPE
+			ALFormat.Mono16,		// AudioChannels.Mono
+			ALFormat.Stereo16,	// AudioChannels.Stereo
 		};
 
-		private static readonly int[] XNAToFloat = new int[]
+		private static readonly ALFormat[] XNAToFloat = new[]
 		{
-			AL10.AL_NONE,			// NOPE
-			ALEXT.AL_FORMAT_MONO_FLOAT32,	// AudioChannels.Mono
-			ALEXT.AL_FORMAT_STEREO_FLOAT32	// AudioChannels.Stereo
+			ALFormat.MonoFloat32Ext,			// NOPE
+			ALFormat.MonoFloat32Ext,	// AudioChannels.Mono
+			ALFormat.StereoFloat32Ext	// AudioChannels.Stereo
 		};
 
 		#endregion
@@ -1293,37 +1176,20 @@ namespace Microsoft.Xna.Framework.Audio
 
 		public ReadOnlyCollection<RendererDetail> GetDevices()
 		{
-			IntPtr deviceList = ALC10.alcGetString(IntPtr.Zero, ALC11.ALC_ALL_DEVICES_SPECIFIER);
-			List<RendererDetail> renderers = new List<RendererDetail>();
-
-			int i = 0;
-			string curString = Marshal.PtrToStringAnsi(deviceList);
-			while (!String.IsNullOrEmpty(curString))
-			{
-				renderers.Add(new RendererDetail(
-					curString,
-					i.ToString()
-				));
-				i += 1;
-				deviceList += curString.Length + 1;
-				curString = Marshal.PtrToStringAnsi(deviceList);
-			}
+			var renderers = Alc.GetString(IntPtr.Zero, AlcGetStringList.AllDevicesSpecifier)
+				.Select((item, i) => new RendererDetail(
+                    item,
+                    i.ToString()
+                )).ToList();
 
 			return new ReadOnlyCollection<RendererDetail>(renderers);
 		}
 
 		public ReadOnlyCollection<Microphone> GetCaptureDevices()
 		{
-			IntPtr deviceList = ALC10.alcGetString(IntPtr.Zero, ALC11.ALC_CAPTURE_DEVICE_SPECIFIER);
-			List<Microphone> microphones = new List<Microphone>();
-
-			string curString = Marshal.PtrToStringAnsi(deviceList);
-			while (!String.IsNullOrEmpty(curString))
-			{
-				microphones.Add(new Microphone(curString));
-				deviceList += curString.Length + 1;
-				curString = Marshal.PtrToStringAnsi(deviceList);
-			}
+			var microphones = Alc.GetString(IntPtr.Zero, AlcGetStringList.CaptureDeviceSpecifier)
+				.Select(item => new Microphone(item))
+				.ToList();
 
 			return new ReadOnlyCollection<Microphone>(microphones);
 		}
